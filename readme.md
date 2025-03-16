@@ -15,6 +15,7 @@
 12. [Security Best Practices](#security-best-practices)
 13. [Azure Service Principal Creation](#azure-service-principal-creation)
 14. [Changelog Practices](#changelog-practices)
+15. [Database Setup with EF Core & Managed Identity](#database-setup-with-ef-core--managed-identity)
 
 ---
 
@@ -97,6 +98,19 @@ resource sqlServer 'Microsoft.Sql/servers@2022-03-01' = {
     administratorLogin: secretUsername.properties.value
     administratorLoginPassword: secretPassword.properties.value
   }
+}
+
+resource sqlDatabase 'Microsoft.Sql/servers/databases@2022-03-01' = {
+  name: 'mydatabase'
+  parent: sqlServer
+  properties: {
+    collation: 'SQL_Latin1_General_CP1_CI_AS'
+  }
+}
+
+resource userAssignedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {
+  name: 'myUserAssignedIdentity'
+  location: location
 }
 ```
 
@@ -429,6 +443,61 @@ jobs:
 ```
 
 By following these practices, you can maintain a clear and organized changelog that provides valuable insights into the evolution of your project.
+
+---
+
+## **1️⃣5️⃣ Database Setup with EF Core & Managed Identity**
+To communicate with the database using Managed Identity (avoiding connection strings), follow these steps:
+
+1. **Add Azure SQL Database and Managed Identity** in Bicep (see above).
+2. **Assign the Managed Identity** the necessary role to access the database.
+3. **Use EF Core** with `UseAzureManagedIdentity()` in your `.NET` code:
+```csharp
+var sqlServer = builder.Configuration["SqlServer:Server"];
+var database = builder.Configuration["SqlServer:Database"];
+var connectionString = $"Server={sqlServer};Database={database};";
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(connectionString, sqlOptions =>
+        sqlOptions.UseAzureManagedIdentity()));
+```
+
+You can then run your EF Core migrations using:
+```bash
+dotnet ef database update
+```
+
+## **Database Migration Best Practices**
+1. **Use EF Core Migrations** – Keep schema changes under version control.
+2. **Test Migrations on Staging** – Validate your migrations in a non-production environment.
+3. **Automate with CI/CD** – Run `dotnet ef migrations add <MigrationName>` and `dotnet ef database update` as part of your pipeline.
+4. **Backup Databases** – Always create a backup or snapshot before applying new migrations.
+
+### **CI/CD: Running EF Core Migrations Example**
+```yaml
+# ...existing code...
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run EF Core Migrations
+        run: |
+          dotnet ef database update --project MinimalApiProject.csproj
+# ...existing code...
+```
+
+### **Running EF Core Migrations in CI/CD**
+- After building the solution and before or after deploying your application, add a step in your pipeline to run:
+  ```bash
+  dotnet ef database update --project MinimalApiProject.csproj
+  ```
+- This ensures your database schema is always in sync with your code changes.
+
+### **Optional Database Backup**
+- You can create a backup (e.g. using the Azure CLI) before running migrations:
+  ```bash
+  az sql db export --admin-user "..." --admin-password "..." --name "mydatabase" \
+    --resource-group MyResourceGroup --server "sqlserverdemo" --storage-key "..." --storage-uri "..."
+  ```
 
 ---
 
